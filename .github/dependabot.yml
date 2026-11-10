@@ -1,0 +1,12 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /admin
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5
+  - package-ecosystem: pub
+    directory: /app
+    schedule:
+      interval: monthly
+    open-pull-requests-limit: 5

@@ -1,0 +1,46 @@
+# Secrets and signing: never commit
+.env
+.env.*
+!.env.example
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+key.properties
+local.properties
+google-services.json
+GoogleService-Info.plist
+*.mobileprovision
+service-account*.json
+
+# Editors and OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.iml
+*.swp
+
+# Flutter
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.pub-cache/
+app/.pub/
+app/build/
+app/coverage/
+app/android/.gradle/
+app/android/.kotlin/
+app/android/build/
+app/android/app/debug/
+app/android/app/profile/
+app/android/app/release/
+*.symbols
+app.*.map.json
+
+# Node
+node_modules/
+admin/dist/
+.vercel/
+*.log
