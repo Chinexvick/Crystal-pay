@@ -120,10 +120,10 @@ export default function Overview() {
           <ul>
             {active.map((q) => (
               <li key={q.key} className="border-t border-line-2">
-                <Link to={q.to} className="group grid grid-cols-[minmax(0,1fr)_64px_minmax(170px,auto)_24px] items-center gap-4 px-5 h-[60px] hover:bg-hover transition-colors">
+                <Link to={q.to} className="group grid grid-cols-[minmax(0,1fr)_auto] sm:grid-cols-[minmax(0,1fr)_64px_minmax(170px,auto)_24px] items-center gap-x-4 gap-y-2 px-5 py-3.5 sm:py-0 sm:h-[60px] hover:bg-hover transition-colors">
                   <span className="min-w-0">
                     <span className="block text-[14px] font-bold truncate">{q.label}</span>
-                    <span className="block text-[12.5px] text-muted truncate">
+                    <span className="block text-[12.5px] text-muted sm:truncate">
                       {num(q.count)} {q.count === 1 ? q.what[0] : q.what[1]} · act within {duration(q.sla)}
                     </span>
                   </span>
@@ -131,18 +131,18 @@ export default function Overview() {
                     <span className="text-[22px] font-bold tracking-[-0.02em] leading-none">{num(q.count)}</span>
                     {q.late > 0 && <span className="block text-[11.5px] font-semibold text-bad mt-1">{q.late} late</span>}
                   </span>
-                  <span className="flex flex-col items-start gap-0.5">
+                  <span className="col-span-2 sm:col-span-1 flex items-center gap-2 sm:flex-col sm:items-start sm:gap-0.5">
                     <span className="text-[11.5px] text-faint">Oldest</span>
                     <Wait since={q.oldest} sla={q.sla} width={72} />
                   </span>
-                  <ArrowRightIcon size={16} className="text-faint group-hover:text-ink transition-colors" />
+                  <ArrowRightIcon size={16} className="hidden sm:block text-faint group-hover:text-ink transition-colors" />
                 </Link>
               </li>
             ))}
           </ul>
           {clear.length > 0 && (
-            <div className="flex items-center gap-2 px-5 h-12 border-t border-line-2 text-[13px] text-muted">
-              <CheckCircleIcon size={16} weight="fill" className="text-ok-mark" />
+            <div className="flex items-center gap-2 px-5 py-3 min-h-12 border-t border-line-2 text-[13px] text-muted">
+              <CheckCircleIcon size={16} weight="fill" className="text-ok-mark shrink-0" />
               Nothing waiting in {clear.map((q) => q.label.toLowerCase()).join(', ')}.
             </div>
           )}
@@ -243,17 +243,19 @@ export default function Overview() {
             {providers.map((p) => {
               const h = providerHealth(p.rate1h)
               return (
-                <li key={p.key} className="grid grid-cols-[28px_minmax(0,1fr)_120px_92px] items-center gap-3 px-5 h-[52px] border-t border-line-2">
-                  <Logo src={p.logo} name={p.name} size={28} />
+                <li key={p.key} className="grid grid-cols-[28px_minmax(0,1fr)_auto] sm:grid-cols-[28px_minmax(0,1fr)_120px_92px] items-center gap-x-3 gap-y-1.5 px-5 py-3 sm:py-0 sm:h-[52px] border-t border-line-2">
+                  <span className="row-span-2 sm:row-span-1">
+                    <Logo src={p.logo} name={p.name} size={28} />
+                  </span>
                   <span className="min-w-0">
                     <span className="block text-[13.5px] font-semibold truncate">{p.name}</span>
-                    <span className="block text-[12px] text-muted">{p.service} · {(p.avgMs / 1000).toFixed(1)}s average</span>
+                    <span className="block text-[12px] text-muted truncate">{p.service} · {(p.avgMs / 1000).toFixed(1)}s average</span>
                   </span>
-                  <span className="flex items-center gap-2">
+                  <span className="col-start-2 row-start-2 sm:col-start-auto sm:row-start-auto flex items-center gap-2">
                     <Meter value={p.rate1h / 100} tone={h.tone} width={64} />
                     <span className="text-[13px] font-semibold num">{pct(p.rate1h)}</span>
                   </span>
-                  <span className={cx('inline-flex items-center gap-1 text-[12.5px] font-semibold justify-self-end', h.tone === 'ok' ? 'text-ok' : h.tone === 'warn' ? 'text-warn' : 'text-bad')}>
+                  <span className={cx('col-start-3 row-start-1 sm:col-start-auto sm:row-start-auto inline-flex items-center gap-1 text-[12.5px] font-semibold justify-self-end', h.tone === 'ok' ? 'text-ok' : h.tone === 'warn' ? 'text-warn' : 'text-bad')}>
                     {h.tone === 'ok' ? <CheckCircleIcon size={14} weight="fill" /> : h.tone === 'warn' ? <WarningIcon size={14} weight="fill" /> : <WarningCircleIcon size={14} weight="fill" />}
                     {h.label}
                   </span>
@@ -299,10 +301,10 @@ function Stat({ label, value, now, prev, range, points, sub }: { label: string; 
     <div className="bg-surface border border-line rounded-[var(--radius-card)] px-5 py-4">
       <div className="text-[12.5px] font-semibold text-muted">{label}</div>
       <div className="text-[26px] font-bold tracking-[-0.025em] mt-1 leading-tight">{value}</div>
-      <div className="flex items-center gap-1 mt-1.5 text-[12px]">
+      <div className="flex flex-wrap items-center gap-x-1 gap-y-0.5 mt-1.5 text-[12px]">
         {prev > 0 || points ? (
           <>
-            <span className={cx('inline-flex items-center gap-0.5 font-semibold', up ? 'text-ok' : 'text-bad')}>
+            <span className={cx('inline-flex items-center gap-0.5 font-semibold whitespace-nowrap', up ? 'text-ok' : 'text-bad')}>
               {up ? <ArrowUpRightIcon size={13} weight="bold" /> : <ArrowDownRightIcon size={13} weight="bold" />}
               {points ? `${Math.abs(diff).toFixed(1)} pts` : pct(Math.abs(diff), 0)}
             </span>
