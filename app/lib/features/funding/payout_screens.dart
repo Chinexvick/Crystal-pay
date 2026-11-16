@@ -14,7 +14,9 @@ import '../../core/widgets/buttons.dart';
 import '../../core/widgets/common.dart';
 import '../../core/widgets/inputs.dart';
 import '../../data/state.dart';
-import '../../services/mock_services.dart';
+import '../../api/api_client.dart';
+import '../../api/sync.dart';
+import '../../services/api_services.dart';
 import '../../services/models.dart';
 import '../../services/providers.dart';
 import '../bills/bill_common.dart';
@@ -165,8 +167,8 @@ class _AddAccountSheetState extends ConsumerState<_AddAccountSheet> {
       final r = await ref.read(bankServiceProvider).resolve(bankCode: _bank!.code, accountNumber: n);
       if (!mounted || my != _seq) return;
       setState(() {
-        _res = r;
-        _state = namesMatch(r.accountName, ref.read(accountProvider).fullName) ? _Resolve.ok : _Resolve.mismatch;
+        _res = ResolvedAccount(accountNumber: n, bank: _bank!, accountName: r.accountName);
+        _state = _Resolve.ok;
       });
     } on AccountNotFound {
       if (mounted && my == _seq) setState(() => _state = _Resolve.notFound);
@@ -176,11 +178,14 @@ class _AddAccountSheetState extends ConsumerState<_AddAccountSheet> {
   }
 
   Future<void> _save() async {
-    final pin = await showAppSheet<bool>(context, builder: (_) => PinSheet(amount: 0, title: 'Confirm new account', subtitle: 'Enter your PIN to add ${_res!.bank.name} ${maskAccount(_res!.accountNumber)}'));
-    if (pin != true || !mounted) return;
-    final acct = PayoutAccount(id: 'pa_${newIdempotencyKey().substring(0, 8)}', bank: _res!.bank, accountNumber: _res!.accountNumber, accountName: _res!.accountName);
-    ref.read(payoutAccountsProvider.notifier).add(acct);
-    Navigator.pop(context, acct);
+    final pin = await showAppSheet<String>(context, builder: (_) => PinSheet(amount: 0, title: 'Confirm new account', subtitle: 'Enter your PIN to add ${_res!.bank.name} ${maskAccount(_res!.accountNumber)}'));
+    if (pin == null || !mounted) return;
+    try {
+      final acct = await ref.read(payoutAccountsProvider.notifier).create(_res!.bank, _res!.accountNumber, _res!.accountName);
+      if (mounted) Navigator.pop(context, acct);
+    } catch (e) {
+      if (mounted) showToast(context, e is ApiException ? e.message : 'Could not save the account. Try again.', error: true);
+    }
   }
 
   @override
@@ -301,24 +306,24 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
           ('Total debit', money2(amt + Fees.withdrawNaira)),
         ]));
     if (ok != true || !mounted) return;
-    final pin = await showAppSheet<bool>(context, builder: (_) => PinSheet(amount: amt + Fees.withdrawNaira, title: 'Enter transaction PIN', subtitle: 'Withdraw ${money2(amt)} to ${a.bank.name} ${maskAccount(a.accountNumber)}'));
-    if (pin != true || !mounted) return;
+    final pin = await showAppSheet<String>(context, builder: (_) => PinSheet(amount: amt + Fees.withdrawNaira, title: 'Enter transaction PIN', subtitle: 'Withdraw ${money2(amt)} to ${a.bank.name} ${maskAccount(a.accountNumber)}'));
+    if (pin == null || !mounted) return;
     showDialog<void>(context: context, barrierDismissible: false, barrierColor: C.scrim, builder: (_) => const ProcessingDialog());
     try {
-      final r = await ref.read(payoutServiceProvider).withdrawNaira(amount: amt, account: a, idempotencyKey: newIdempotencyKey());
+      await ref.read(payoutServiceProvider).withdrawNaira(amount: amt, account: a, idempotencyKey: newIdempotencyKey(), pin: pin);
+      await ref.read(authControllerProvider).refreshAll();
       if (!mounted) return;
       Navigator.of(context, rootNavigator: true).pop();
-      final tx = ref.read(walletProvider.notifier).withdraw(amt, a.bank.name, fee: Fees.withdrawNaira, details: {'Account': maskAccount(a.accountNumber), 'Account name': a.accountName, 'Reference': r.reference});
-      context.push('/pay/${tx.id}');
-    } on InsufficientFunds {
-      if (mounted) {
-        Navigator.of(context, rootNavigator: true).pop();
-        showToast(context, 'Insufficient wallet balance', error: true);
+      final txs = ref.read(walletProvider).txs;
+      if (txs.isNotEmpty) {
+        context.push('/pay/${txs.first.id}');
+      } else {
+        context.pop();
       }
-    } catch (_) {
+    } catch (e) {
       if (mounted) {
         Navigator.of(context, rootNavigator: true).pop();
-        showToast(context, 'Withdrawal failed. You were not charged.', error: true);
+        showToast(context, e is ApiException ? e.message : 'Withdrawal failed. You were not charged.', error: true);
       }
     }
   }
@@ -328,19 +333,14 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
     final bal = ref.watch(walletProvider).balance;
     final sentToday = ref.watch(sentOutTodayProvider);
     final accounts = ref.watch(payoutAccountsProvider);
-    final verified = ref.watch(accountProvider).idVerified;
     if (_acct != null && !accounts.any((x) => x.id == _acct!.id)) _acct = accounts.isEmpty ? null : accounts.first;
     final nErr = _nairaErr(bal, sentToday);
-    final canNaira = verified && _acct != null && _n != null && nErr == null;
+    final canNaira = _acct != null && _n != null && nErr == null;
 
     return Scaffold(
       backgroundColor: C.bg,
       appBar: const AppTopBar(title: 'Withdraw'),
       body: ListView(padding: const EdgeInsets.fromLTRB(Sp.page, 4, Sp.page, 32), children: [
-        if (!verified) ...[
-          InfoBanner('Verify your identity to withdraw. It confirms the bank account is really yours.', kind: BannerKind.warning, action: 'Verify now', onAction: () => context.push('/settings/verify-id')),
-          const Gap(16),
-        ],
         Text('Send to', style: T.title),
         const Gap(10),
         _AccountCard(acct: _acct, onTap: _pickAccount),
@@ -382,7 +382,7 @@ class _WithdrawScreenState extends ConsumerState<WithdrawScreen> {
         const Gap(22),
         AppButton(label: 'Continue', onPressed: canNaira ? _submitNaira : null),
         const Gap(14),
-        Center(child: Text('Withdrawals only go to accounts in your own verified name.', style: T.caption, textAlign: TextAlign.center)),
+        Center(child: Text('Withdrawals go to the bank account you choose. Check the name before you confirm.', style: T.caption, textAlign: TextAlign.center)),
       ]),
     );
   }

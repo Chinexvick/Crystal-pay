@@ -6,6 +6,8 @@ import 'package:crystal_pay/core/icons/phosphor.dart';
 
 import '../../app/router.dart';
 import '../../app/theme.dart';
+import '../../api/api_client.dart';
+import '../../api/sync.dart';
 import '../../data/state.dart';
 import '../widgets/brand.dart';
 import '../widgets/buttons.dart';
@@ -138,7 +140,7 @@ class _AppLockGateState extends ConsumerState<AppLockGate> with WidgetsBindingOb
                   ],
                   const Spacer(),
                   TextLink('Log out', trailing: false, color: C.error, onTap: () {
-                    ref.read(sessionProvider.notifier).signOut();
+                    ref.read(authControllerProvider).signOut();
                     setState(() => _locked = false);
                     ref.read(routerProvider).go('/welcome');
                   }),

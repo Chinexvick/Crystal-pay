@@ -78,8 +78,8 @@ class PlansScreen extends ConsumerWidget {
     }
     final ok = await showAppSheet<bool>(context, builder: (_) => _SubscribeSheet(plan: p));
     if (ok != true || !context.mounted) return;
-    final pin = await showAppSheet<bool>(context, builder: (_) => PinSheet(amount: p.price, title: 'Confirm with your PIN', subtitle: '${p.name} plan · ${money(p.price)}'));
-    if (pin != true || !context.mounted) return;
+    final pin = await showAppSheet<String>(context, builder: (_) => PinSheet(amount: p.price, title: 'Confirm with your PIN', subtitle: '${p.name} plan · ${money(p.price)}'));
+    if (pin == null || !context.mounted) return;
     try {
       ref.read(walletProvider.notifier).pay(
             kind: TxKind.subscription,

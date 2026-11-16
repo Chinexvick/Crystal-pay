@@ -13,7 +13,11 @@ import '../../core/widgets/buttons.dart';
 import '../../core/widgets/common.dart';
 import '../../core/widgets/inputs.dart';
 import '../../data/catalog.dart';
+import 'server_bills.dart';
 import '../../data/models.dart';
+import '../../api/api_client.dart';
+import '../../api/sync.dart';
+import '../../data/account.dart';
 import '../../data/state.dart';
 
 // ───────────────────────── Scaffold & promo ─────────────────────────
@@ -371,7 +375,14 @@ class BillRequest {
     this.token,
     this.discount = 0,
     this.beneficiary,
+    this.provId,
+    this.itemCode,
+    this.customer,
   });
+  /// Server product: provider id, plan/bouquet code (null = pick the only item) and the number being paid for.
+  final String? provId;
+  final String? itemCode;
+  final String? customer;
   final TxKind kind;
   final String productName;
   final Biller? provider;
@@ -387,30 +398,39 @@ class BillRequest {
 
 /// Confirm → PIN → processing → result. Returns once the flow has finished.
 Future<void> startBillPayment(BuildContext context, WidgetRef ref, BillRequest r) async {
+  final apiKind = switch (r.kind) { TxKind.airtime => 'airtime', TxKind.data => 'data', TxKind.electricity => 'power', TxKind.tv => 'tv', TxKind.internet => 'internet', _ => null };
+  final provId = r.provId ?? r.provider?.id;
+  if (apiKind == null || provId == null || r.customer == null) {
+    showToast(context, '${r.productName} payments are not available yet.', error: true);
+    return;
+  }
   final confirmed = await showAppSheet<bool>(context, builder: (_) => ConfirmSheet(r));
   if (confirmed != true || !context.mounted) return;
-  final pin = await showAppSheet<bool>(context, builder: (_) => PinSheet(amount: r.amount));
-  if (pin != true || !context.mounted) return;
+  final pin = await showAppSheet<String>(context, builder: (_) => PinSheet(amount: r.amount));
+  if (pin == null || !context.mounted) return;
 
   showDialog<void>(context: context, barrierDismissible: false, barrierColor: C.scrim, builder: (_) => const ProcessingDialog());
-  await Future<void>.delayed(const Duration(milliseconds: 1500));
-  if (!context.mounted) return;
-  Navigator.of(context, rootNavigator: true).pop();
-
+  final nav = Navigator.of(context, rootNavigator: true);
+  final router = GoRouter.of(context);
   try {
-    final tx = ref.read(walletProvider.notifier).pay(
-          kind: r.kind,
-          title: r.kind.label,
-          subtitle: r.subtitle,
-          amount: r.amount,
-          details: {...r.details, for (final e in r.rows) if (e.$1 != 'Amount' && !r.details.containsKey(e.$1) && e.$1 != 'Product Name') e.$1: e.$2},
-          token: r.token,
-        );
-    if (r.cashback > 0) ref.read(walletProvider.notifier).addCashback(r.cashback);
+    var code = r.itemCode;
+    if (code == null) {
+      final items = await ref.read(billItemsProvider((apiKind, provId)).future);
+      if (items.isEmpty) throw ApiException(404, 'unavailable', 'This provider is not available right now.');
+      code = items.first.code;
+    }
+    final res = await ref.read(apiProvider).post('/bills/pay', {'kind': apiKind, 'provider': provId, 'itemCode': code, 'customer': r.customer, 'amount': r.amount, 'pin': pin});
+    await ref.read(authControllerProvider).refreshAll();
     if (r.beneficiary != null) ref.read(beneficiariesProvider.notifier).add(r.beneficiary!);
-    if (context.mounted) context.push('/pay/${tx.id}');
-  } on InsufficientFunds {
-    if (context.mounted) showToast(context, 'Insufficient wallet balance', error: true);
+    if (nav.mounted) nav.pop();
+    router.push('/pay/${Uri.encodeComponent((res['reference'] ?? '').toString())}');
+  } on ApiException catch (e) {
+    if (nav.mounted) nav.pop();
+    ref.read(authControllerProvider).refreshAll();
+    if (context.mounted) showToast(context, e.message, error: true);
+  } catch (_) {
+    if (nav.mounted) nav.pop();
+    if (context.mounted) showToast(context, 'Payment failed. Check your connection and your wallet balance.', error: true);
   }
 }
 
@@ -521,7 +541,10 @@ class PinSheet extends ConsumerStatefulWidget {
 
 class _PinSheetState extends ConsumerState<PinSheet> {
   String? _error;
+  String? _first; // when creating a PIN: the first entry
+  bool _busy = false;
   Timer? _tick;
+  int _round = 0;
 
   @override
   void initState() {
@@ -537,20 +560,60 @@ class _PinSheetState extends ConsumerState<PinSheet> {
     super.dispose();
   }
 
-  /// Demo rule: any 4 digits work, except 0000 which shows the error state.
-  /// Production: send the PIN to the server over TLS. Never store it locally.
-  void _check(String pin) {
+  bool get _creating => !ref.read(accountProvider).hasPin;
+
+  /// The server checks the PIN (and counts wrong attempts). The PIN is never stored on the phone.
+  Future<void> _check(String pin) async {
+    if (_busy) return;
     final guard = ref.read(pinGuardProvider.notifier);
     if (ref.read(pinGuardProvider).locked) return;
-    if (pin == '0000') {
-      guard.fail();
-      final g = ref.read(pinGuardProvider);
-      setState(() => _error = g.locked ? 'Too many attempts' : 'Incorrect PIN · ${g.attemptsLeft} attempts left');
-      HapticFeedback.heavyImpact();
+    if (_creating) {
+      if (_first == null) {
+        setState(() {
+          _first = pin;
+          _round++;
+          _error = null;
+        });
+        return;
+      }
+      if (_first != pin) {
+        setState(() {
+          _first = null;
+          _round++;
+          _error = 'The PINs did not match. Start again.';
+        });
+        return;
+      }
+      setState(() => _busy = true);
+      try {
+        await ref.read(apiProvider).post('/me/pin', {'pin': pin});
+        await ref.read(authControllerProvider).refreshProfile();
+        if (mounted) Navigator.pop(context, pin);
+      } on ApiException catch (e) {
+        if (mounted) setState(() => _error = e.message);
+      } finally {
+        if (mounted) setState(() => _busy = false);
+      }
       return;
     }
-    guard.success();
-    Navigator.pop(context, true);
+    setState(() => _busy = true);
+    try {
+      await ref.read(apiProvider).post('/me/pin/verify', {'pin': pin});
+      guard.success();
+      if (mounted) Navigator.pop(context, pin);
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.code == 'bad_pin') {
+        guard.fail();
+        final g = ref.read(pinGuardProvider);
+        setState(() => _error = g.locked ? 'Too many attempts' : 'Incorrect PIN · ${g.attemptsLeft} attempts left');
+        HapticFeedback.heavyImpact();
+      } else {
+        setState(() => _error = e.message);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -558,10 +621,13 @@ class _PinSheetState extends ConsumerState<PinSheet> {
     final g = ref.watch(pinGuardProvider);
     final locked = g.locked;
     final secs = g.remaining.inSeconds + 1;
+    final creating = !ref.watch(accountProvider).hasPin;
+    final title = creating ? (_first == null ? 'Create your transaction PIN' : 'Confirm your PIN') : widget.title;
+    final sub = creating ? 'Choose 4 digits you will use to approve payments and withdrawals.' : (widget.subtitle ?? 'Confirm payment of ${money2(widget.amount)}');
     return SheetFrame(
-      title: widget.title,
+      title: title,
       child: Column(children: [
-        Text(widget.subtitle ?? 'Confirm payment of ${money2(widget.amount)}', style: T.small.copyWith(fontSize: 13.5), textAlign: TextAlign.center),
+        Text(sub, style: T.small.copyWith(fontSize: 13.5), textAlign: TextAlign.center),
         const Gap(26),
         if (locked)
           Padding(
@@ -575,12 +641,14 @@ class _PinSheetState extends ConsumerState<PinSheet> {
             ]),
           )
         else
-          PinEntry(onComplete: _check, error: _error),
+          PinEntry(key: ValueKey('pin$_round'), onComplete: _check, error: _error),
+        if (_busy) const Padding(padding: EdgeInsets.only(top: 10), child: SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2.2, color: C.primary))),
         const Gap(6),
-        TextLink('Forgot PIN?', onTap: () {
-          Navigator.pop(context, false);
-          context.push('/settings/security');
-        }, trailing: false),
+        if (!creating)
+          TextLink('Forgot PIN?', onTap: () {
+            Navigator.pop(context);
+            context.push('/settings/security');
+          }, trailing: false),
         const Gap(4),
       ]),
     );

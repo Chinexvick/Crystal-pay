@@ -118,8 +118,8 @@ class _SendMoneyScreenState extends ConsumerState<SendMoneyScreen> {
     FocusScope.of(context).unfocus();
     final ok = await showAppSheet<bool>(context, builder: (_) => _ConfirmSheet(to: to, amount: v, note: _note.text.trim()));
     if (ok != true || !mounted) return;
-    final pin = await showAppSheet<bool>(context, builder: (_) => PinSheet(amount: v, title: 'Confirm with your PIN', subtitle: 'Send ${money(v)} to ${to.name}'));
-    if (pin != true || !mounted) return;
+    final pin = await showAppSheet<String>(context, builder: (_) => PinSheet(amount: v, title: 'Confirm with your PIN', subtitle: 'Send ${money(v)} to ${to.name}'));
+    if (pin == null || !mounted) return;
     showDialog<void>(context: context, barrierDismissible: false, barrierColor: C.scrim, builder: (_) => const ProcessingDialog());
     await Future<void>.delayed(const Duration(milliseconds: 1300));
     if (!mounted) return;

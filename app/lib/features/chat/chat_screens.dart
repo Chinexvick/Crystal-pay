@@ -8,6 +8,8 @@ import '../../core/utils/format.dart';
 import '../../core/widgets/buttons.dart';
 import '../../core/widgets/common.dart';
 import '../../data/models.dart';
+import '../../api/api_client.dart';
+import '../../api/sync.dart';
 import '../../data/state.dart';
 import '../market/item_screens.dart';
 import '../market/listing_card.dart';
@@ -256,7 +258,7 @@ class NotificationsScreen extends ConsumerWidget {
     final unread = ref.watch(unreadNotesProvider);
     return Scaffold(
       backgroundColor: C.bg,
-      appBar: AppTopBar(title: 'Notifications', actionLabel: unread > 0 ? 'Mark all read' : null, onAction: () => ref.read(notesProvider.notifier).markAllRead()),
+      appBar: AppTopBar(title: 'Notifications', actionLabel: unread > 0 ? 'Mark all read' : null, onAction: () => ref.read(authControllerProvider).markNotesRead()),
       body: notes.isEmpty
           ? const EmptyState(icon: PhosphorIconsDuotone.bell, title: 'All caught up', message: 'New alerts about your orders and payments show up here.')
           : ListView.separated(

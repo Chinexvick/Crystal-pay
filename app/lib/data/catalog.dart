@@ -77,14 +77,15 @@ Biller networkById(String id) => networks.firstWhere((n) => n.id == id, orElse: 
 // ───────────────────────── Data plans ─────────────────────────
 
 class DataPlan {
-  const DataPlan(this.size, this.unit, this.days, this.price, this.bucket, {this.tag});
+  const DataPlan(this.size, this.unit, this.days, this.price, this.bucket, {this.tag, this.code});
+  final String? code;
   final String size;
   final String unit;
   final int days;
   final int price;
   final String bucket; // HOT / Daily / Weekly / Weekend / Monthly
   final String? tag;
-  String get validity => days == 1 ? '1 Day' : '$days Days';
+  String get validity => days == 0 ? 'Data bundle' : days == 1 ? '1 Day' : '$days Days';
   String get label => '$size$unit';
 }
 
@@ -147,7 +148,8 @@ List<DataPlan> plansFor(String networkId, String bucket) {
 // ───────────────────────── TV & Internet bundles ─────────────────────────
 
 class Bundle {
-  const Bundle(this.name, this.price, {this.detail = ''});
+  const Bundle(this.name, this.price, {this.detail = '', this.code});
+  final String? code;
   final String name;
   final int price;
   final String detail;

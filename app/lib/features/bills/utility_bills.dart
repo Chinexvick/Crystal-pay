@@ -1,5 +1,3 @@
-import 'dart:math' as math;
-
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -13,14 +11,11 @@ import '../../core/widgets/inputs.dart';
 import '../../data/catalog.dart';
 import '../../data/models.dart';
 import '../../data/state.dart';
+import '../../api/api_client.dart';
 import 'bill_common.dart';
+import 'server_bills.dart';
 
 enum Verify { idle, loading, ok, error }
-
-String _token() {
-  final r = math.Random();
-  return List.generate(5, (_) => (1000 + r.nextInt(9000)).toString()).join(' ');
-}
 
 /// Row of equally-sized provider tiles (TV / betting / internet).
 class ProviderChips extends StatelessWidget {
@@ -170,18 +165,17 @@ class ElectricityScreen extends ConsumerStatefulWidget {
 class _ElectricityScreenState extends ConsumerState<ElectricityScreen> {
   Biller _disco = discos.firstWhere((d) => d.id == 'enugu');
   int _type = 0;
-  final _meter = TextEditingController(text: '45031987266');
+  final _meter = TextEditingController();
   final _amount = TextEditingController();
   Verify _v = Verify.idle;
   String _name = '';
   int _vid = 0;
-  bool _voucher = true;
   bool _save = false;
+  String _err = '';
 
-  @override
-  void initState() {
-    super.initState();
-    _verify();
+  Future<BillItem?> _item() async {
+    final l = await ref.read(billItemsProvider(('power', _disco.id)).future);
+    return pickPower(l, prepaid: _type == 0);
   }
 
   @override
@@ -199,25 +193,29 @@ class _ElectricityScreenState extends ConsumerState<ElectricityScreen> {
       return;
     }
     setState(() => _v = Verify.loading);
-    await Future<void>.delayed(const Duration(milliseconds: 900));
-    if (!mounted || id != _vid) return;
-    setState(() {
-      if (m == '00000000000') {
-        _v = Verify.error;
-      } else {
+    try {
+      final it = await _item();
+      if (it == null) throw ApiException(404, 'unsupported', 'This provider is not available yet.');
+      final n = await validateCustomer(ref, kind: 'power', provider: _disco.id, itemCode: it.code, customer: m);
+      if (!mounted || id != _vid) return;
+      setState(() {
         _v = Verify.ok;
-        _name = mockCustomerName(m);
-      }
-    });
+        _name = (n == null || n.trim().isEmpty) ? 'Meter ${m.substring(m.length - 4)}' : n;
+      });
+    } catch (e) {
+      if (!mounted || id != _vid) return;
+      setState(() {
+        _v = Verify.error;
+        _err = e is ApiException && e.isNetwork ? 'No internet connection. Check and try again.' : (e is ApiException ? e.message : 'Meter not found for ${_disco.name}. Check the number and try again.');
+      });
+    }
   }
 
   int get _amt => int.tryParse(_amount.text) ?? 0;
   int get _min => _type == 0 ? 1000 : 500;
-  int get _discount => _voucher && _amt >= 2000 ? 20 : 0;
-
-  void _pay() {
-    final token = _type == 0 ? _token() : null;
-    final payable = _amt - _discount;
+  Future<void> _pay() async {
+    final it = await _item();
+    if (!mounted) return;
     startBillPayment(
       context,
       ref,
@@ -225,12 +223,13 @@ class _ElectricityScreenState extends ConsumerState<ElectricityScreen> {
         kind: TxKind.electricity,
         productName: 'Electricity',
         provider: _disco,
+        provId: _disco.id,
+        itemCode: it?.code,
+        customer: _meter.text,
         rows: [('Meter Number', _meter.text), ('Customer Name', _name), ('Account Type', _type == 0 ? 'Prepaid' : 'Postpaid'), ('Amount', money2(_amt))],
-        amount: payable,
-        discount: _discount,
+        amount: _amt,
         subtitle: '${_disco.name} · ${_type == 0 ? 'Prepaid' : 'Postpaid'}',
-        token: token,
-        details: {'Provider': _disco.name, 'Meter': _meter.text, 'Customer': _name, 'Type': _type == 0 ? 'Prepaid' : 'Postpaid', if (_type == 0) 'Units': '${(_amt / 70).toStringAsFixed(1)} kWh'},
+        details: {'Provider': _disco.name, 'Meter': _meter.text, 'Customer': _name, 'Type': _type == 0 ? 'Prepaid' : 'Postpaid'},
         beneficiary: _save ? Beneficiary(id: 'b${DateTime.now().millisecondsSinceEpoch}', name: 'Meter ${_meter.text.substring(_meter.text.length - 4)}', value: _meter.text, kind: TxKind.electricity, billerId: _disco.id) : null,
       ),
     );
@@ -262,7 +261,10 @@ class _ElectricityScreenState extends ConsumerState<ElectricityScreen> {
             ]),
           ),
           const Gap(12),
-          SegmentedToggle(options: const ['Prepaid', 'Postpaid'], index: _type, onChanged: (i) => setState(() => _type = i)),
+          SegmentedToggle(options: const ['Prepaid', 'Postpaid'], index: _type, onChanged: (i) {
+            setState(() => _type = i);
+            _verify();
+          }),
           const Gap(12),
           _FieldCard(
             label: 'Meter / Account Number',
@@ -288,17 +290,7 @@ class _ElectricityScreenState extends ConsumerState<ElectricityScreen> {
                 : _VerifyBlock(
                     state: _v,
                     name: _name,
-                    error: 'Meter not found for ${_disco.name}. Check the number and try again.',
-                    extra: _type == 0
-                        ? Container(
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(color: C.bg, borderRadius: BorderRadius.circular(14)),
-                            child: Column(children: [
-                              KvRow('Min Purchase', '1,000', bold: true),
-                              KvRow('Service Address', '${_name.split(' ').first.substring(0, math.min(4, _name.split(' ').first.length))}******', bold: true),
-                            ]),
-                          )
-                        : null,
+                    error: _err.isEmpty ? null : _err,
                   ),
           ),
           if (ok) ...[
@@ -306,57 +298,12 @@ class _ElectricityScreenState extends ConsumerState<ElectricityScreen> {
             SaveBeneficiaryRow(value: _save, onChanged: (v) => setState(() => _save = v)),
           ],
           const Gap(12),
-          AppCard(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-            onTap: () async {
-              final r = await showAppSheet<bool>(
-                context,
-                builder: (ctx) => SheetFrame(
-                  title: 'Vouchers',
-                  child: Column(children: [
-                    Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(color: C.tint2, borderRadius: BorderRadius.circular(16), border: Border.all(color: C.primary.withValues(alpha: .25))),
-                      child: Row(children: [
-                        const IconChip(PhosphorIconsDuotone.ticket, size: 44),
-                        const HGap(12),
-                        Expanded(
-                          child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                            Text('₦20 electricity voucher', style: T.title),
-                            const Gap(2),
-                            Text('Min. spend ₦2,000 · expires in 5 days', style: T.small),
-                          ]),
-                        ),
-                        RadioDot(selected: _voucher),
-                      ]),
-                    ),
-                    const Gap(16),
-                    AppButton(label: _voucher ? 'Remove voucher' : 'Apply voucher', kind: _voucher ? BtnKind.soft : BtnKind.primary, onPressed: () => Navigator.pop(ctx, !_voucher)),
-                  ]),
-                ),
-              );
-              if (r != null) setState(() => _voucher = r);
-            },
-            child: Row(children: [
-              const IconChip(PhosphorIconsDuotone.ticket, size: 38, bg: C.goldTint, fg: C.pending),
-              const HGap(12),
-              Text('Voucher', style: T.title),
-              const HGap(8),
-              const Tag('₦20', bg: C.tint, fg: C.primary),
-              const Spacer(),
-              Text(_voucher ? 'Applied' : 'More', style: T.small),
-              const HGap(2),
-              const PhosphorIcon(PhosphorIconsBold.caretRight, size: 14, color: C.faint),
-            ]),
-          ),
-          const Gap(12),
           AmountCard(
             title: _type == 0 ? 'Select Amount' : 'Amount',
             quick: _type == 0 ? const [1000, 2000, 3000, 5000, 10000, 20000] : const [],
             controller: _amount,
             selected: _amt,
-            subtitleOf: (a) => 'Pay ${money(a - (_voucher && a >= 2000 ? 20 : 0))}',
-            min: _min,
+                        min: _min,
             max: 500000,
             hint: 'Enter Amount',
             payEnabled: ok,
@@ -384,95 +331,19 @@ class BettingScreen extends ConsumerStatefulWidget {
 }
 
 class _BettingScreenState extends ConsumerState<BettingScreen> {
-  Biller _p = bettingProviders.first;
-  Biller? _extra;
-  final _uid = TextEditingController(text: '30482291');
-  final _amount = TextEditingController();
-  bool _save = false;
-
-  @override
-  void dispose() {
-    _uid.dispose();
-    _amount.dispose();
-    super.dispose();
-  }
-
-  int get _amt => int.tryParse(_amount.text) ?? 0;
-
-  void _pay() {
-    startBillPayment(
-      context,
-      ref,
-      BillRequest(
-        kind: TxKind.betting,
-        productName: 'Betting',
-        provider: _p,
-        rows: [('Account Number', _uid.text), ('Amount', money2(_amt))],
-        amount: _amt,
-        subtitle: '${_p.name} · ${_uid.text}',
-        details: {'Provider': _p.name, 'User ID': _uid.text},
-        beneficiary: _save ? Beneficiary(id: 'b${DateTime.now().millisecondsSinceEpoch}', name: 'My ${_p.name}', value: _uid.text, kind: TxKind.betting, billerId: _p.id) : null,
-      ),
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
-    final shown = [bettingProviders[0], bettingProviders[1], _extra ?? bettingProviders[2]];
     return BillScaffold(
       title: 'Betting',
       kind: TxKind.betting,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(Sp.page, 8, Sp.page, 32),
+        padding: const EdgeInsets.fromLTRB(Sp.page, 24, Sp.page, 32),
         children: [
-          AppCard(
-            padding: const EdgeInsets.fromLTRB(10, 8, 10, 6),
-            child: ProviderChips(
-              items: shown,
-              selectedId: _p.id,
-              onTap: (b) => setState(() => _p = b),
-              onMore: () async {
-                final b = await showProviderSheet(context, title: 'Select Provider', items: bettingProviders, selectedId: _p.id);
-                if (b != null) {
-                  setState(() {
-                    _p = b;
-                    _extra = bettingProviders.take(3).contains(b) ? null : b;
-                  });
-                }
-              },
-            ),
-          ),
-          const Gap(12),
-          _FieldCard(
-            label: 'User ID',
-            controller: _uid,
-            maxLen: 14,
-            hint: 'Enter your ${_p.name} ID',
-            trailingLabel: 'Beneficiaries',
-            onTrailing: () async {
-              final b = await showBeneficiarySheet(context, kind: TxKind.betting);
-              if (b != null) setState(() => _uid.text = b.value);
-            },
-            onChanged: (_) => setState(() {}),
-            big: false,
-          ),
-          const Gap(12),
-          SaveBeneficiaryRow(value: _save, onChanged: (v) => setState(() => _save = v)),
-          const Gap(14),
-          AmountCard(
-            title: 'Select Amount',
-            quick: const [100, 200, 300, 400, 500, 1000],
-            controller: _amount,
-            selected: _amt,
-            min: 100,
-            max: 1000000,
-            hint: '100 – 1,000,000',
-            payEnabled: _uid.text.length >= 6,
-            onChanged: (_) => setState(() {}),
-            onPay: _pay,
-          ),
-          const Gap(12),
-          const InfoBanner('Betting wallets are credited instantly. Please gamble responsibly — 18+ only.', kind: BannerKind.warning),
+          const Center(child: IconChip(PhosphorIconsDuotone.coins, size: 72, circle: true, iconSize: 34)),
+          const Gap(16),
+          Center(child: Text('Betting top-up is coming soon', style: T.h3)),
+          const Gap(8),
+          Text('We are connecting betting wallets. Airtime, data, electricity, TV and internet work today.', textAlign: TextAlign.center, style: T.small),
         ],
       ),
     );
@@ -482,11 +353,10 @@ class _BettingScreenState extends ConsumerState<BettingScreen> {
 // ───────────────────────── TV & Internet (bundle pickers) ─────────────────────────
 
 class _BundleScreen extends ConsumerStatefulWidget {
-  const _BundleScreen({required this.title, required this.kind, required this.providers, required this.bundles, required this.idLabel, required this.idHint, required this.idLen, required this.prefill, required this.cardNoun});
+  const _BundleScreen({required this.title, required this.kind, required this.providers, required this.idLabel, required this.idHint, required this.idLen, required this.prefill, required this.cardNoun});
   final String title;
   final TxKind kind;
   final List<Biller> providers;
-  final Map<String, List<Bundle>> bundles;
   final String idLabel;
   final String idHint;
   final int idLen;
@@ -505,17 +375,19 @@ class _BundleScreenState extends ConsumerState<_BundleScreen> {
   int _vid = 0;
   int? _sel;
   bool _save = false;
-
-  @override
-  void initState() {
-    super.initState();
-    _verify();
-  }
+  String _err = '';
 
   @override
   void dispose() {
     _id.dispose();
     super.dispose();
+  }
+
+  String get _apiKind => widget.kind == TxKind.tv ? 'tv' : 'internet';
+
+  BillItem? get _first {
+    final l = ref.read(billItemsProvider((_apiKind, _p.id))).value;
+    return (l == null || l.isEmpty) ? null : l.first;
   }
 
   Future<void> _verify() async {
@@ -525,19 +397,28 @@ class _BundleScreenState extends ConsumerState<_BundleScreen> {
       return;
     }
     setState(() => _v = Verify.loading);
-    await Future<void>.delayed(const Duration(milliseconds: 900));
-    if (!mounted || id != _vid) return;
-    setState(() {
-      if (_id.text == '0000000000') {
-        _v = Verify.error;
-      } else {
+    try {
+      final l = await ref.read(billItemsProvider((_apiKind, _p.id)).future);
+      if (l.isEmpty) throw ApiException(404, 'unsupported', 'This provider is not available yet.');
+      final n = await validateCustomer(ref, kind: _apiKind, provider: _p.id, itemCode: (_sel != null && _sel! < l.length ? l[_sel!] : l.first).code, customer: _id.text);
+      if (!mounted || id != _vid) return;
+      setState(() {
         _v = Verify.ok;
-        _name = mockCustomerName(_id.text);
-      }
-    });
+        _name = (n == null || n.trim().isEmpty) ? '${widget.cardNoun} ${_id.text.substring(_id.text.length - 3)}' : n;
+      });
+    } catch (e) {
+      if (!mounted || id != _vid) return;
+      setState(() {
+        _v = Verify.error;
+        _err = e is ApiException && e.isNetwork ? 'No internet connection. Check and try again.' : (e is ApiException ? e.message : '');
+      });
+    }
   }
 
-  List<Bundle> get _list => widget.bundles[_p.id] ?? const [];
+  List<Bundle> get _list {
+    final l = ref.watch(billItemsProvider((_apiKind, _p.id))).value ?? const <BillItem>[];
+    return [for (final i in l) Bundle(i.name, i.amount.round(), code: i.code)];
+  }
 
   void _pay() {
     final b = _list[_sel!];
@@ -548,9 +429,11 @@ class _BundleScreenState extends ConsumerState<_BundleScreen> {
         kind: widget.kind,
         productName: widget.title,
         provider: _p,
+        provId: _p.id,
+        itemCode: b.code,
+        customer: _id.text,
         rows: [(widget.cardNoun, _id.text), ('Customer Name', _name), ('Package', b.name), ('Amount', money2(b.price))],
         amount: b.price,
-        cashback: (b.price * .01 * 100).round() / 100,
         subtitle: '${_p.name} · ${b.name}',
         details: {'Provider': _p.name, widget.cardNoun: _id.text, 'Package': b.name},
         beneficiary: _save ? Beneficiary(id: 'b${DateTime.now().millisecondsSinceEpoch}', name: '${_p.name} ${_id.text.substring(_id.text.length - 3)}', value: _id.text, kind: widget.kind, billerId: _p.id) : null,
@@ -561,7 +444,9 @@ class _BundleScreenState extends ConsumerState<_BundleScreen> {
   @override
   Widget build(BuildContext context) {
     final ok = _v == Verify.ok;
-    final b = _sel == null || _sel! >= _list.length ? null : _list[_sel!];
+    final list = _list;
+    final async = ref.watch(billItemsProvider((_apiKind, _p.id)));
+    final b = _sel == null || _sel! >= list.length ? null : list[_sel!];
     return BillScaffold(
       title: widget.title,
       kind: widget.kind,
@@ -586,10 +471,13 @@ class _BundleScreenState extends ConsumerState<_BundleScreen> {
             child: ProviderChips(
               items: widget.providers,
               selectedId: _p.id,
-              onTap: (b) => setState(() {
-                _p = b;
-                _sel = null;
-              }),
+              onTap: (b) {
+                setState(() {
+                  _p = b;
+                  _sel = null;
+                });
+                _verify();
+              },
             ),
           ),
           const Gap(12),
@@ -615,48 +503,45 @@ class _BundleScreenState extends ConsumerState<_BundleScreen> {
                 : _VerifyBlock(
                     state: _v,
                     name: _name,
-                    error: 'We could not find that ${widget.cardNoun.toLowerCase()}. Check and try again.',
-                    extra: widget.kind == TxKind.tv
-                        ? Container(
-                            padding: const EdgeInsets.all(14),
-                            decoration: BoxDecoration(color: C.bg, borderRadius: BorderRadius.circular(14)),
-                            child: Column(children: [
-                              KvRow('Current package', _list.isEmpty ? '—' : _list.first.name, bold: true),
-                              const KvRow('Renewal date', '28 Oct 2026', bold: true),
-                            ]),
-                          )
-                        : null,
+                    error: _err.isEmpty ? 'We could not find that ${widget.cardNoun.toLowerCase()}. Check and try again.' : _err,
                   ),
           ),
           if (ok) ...[const Gap(12), SaveBeneficiaryRow(value: _save, onChanged: (v) => setState(() => _save = v))],
           const Gap(18),
           Text('Select package', style: T.h3),
           const Gap(12),
-          AppCard(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
-            child: Column(children: [
-              for (var i = 0; i < _list.length; i++)
-                Pressable(
-                  onTap: () => setState(() => _sel = i),
-                  scale: .99,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(vertical: 14),
-                    decoration: BoxDecoration(border: i == _list.length - 1 ? null : const Border(bottom: BorderSide(color: C.border))),
-                    child: Row(children: [
-                      Expanded(
-                        child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                          Text(_list[i].name, style: T.title),
-                          if (_list[i].detail.isNotEmpty) ...[const Gap(2), Text(_list[i].detail, style: T.small)],
-                        ]),
-                      ),
-                      Text(money(_list[i].price), style: T.moneyOf(15, w: FontWeight.w700, color: _sel == i ? C.primary : C.ink)),
-                      const HGap(12),
-                      RadioDot(selected: _sel == i),
-                    ]),
+          if (async.isLoading)
+            const Padding(padding: EdgeInsets.symmetric(vertical: 32), child: Center(child: CircularProgressIndicator(strokeWidth: 2.4, color: C.primary)))
+          else if (async.hasError || list.isEmpty)
+            Padding(
+              padding: const EdgeInsets.symmetric(vertical: 24),
+              child: Column(children: [
+                Text(async.hasError && !(async.error is ApiException && (async.error as ApiException).status == 404) ? 'Could not load packages.' : 'This provider is not available yet.', style: T.small),
+                const Gap(8),
+                TextLink('Try again', trailing: false, onTap: () => ref.invalidate(billItemsProvider((_apiKind, _p.id)))),
+              ]),
+            )
+          else
+            AppCard(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+              child: Column(children: [
+                for (var i = 0; i < list.length; i++)
+                  Pressable(
+                    onTap: () => setState(() => _sel = i),
+                    scale: .99,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(vertical: 14),
+                      decoration: BoxDecoration(border: i == list.length - 1 ? null : const Border(bottom: BorderSide(color: C.border))),
+                      child: Row(children: [
+                        Expanded(child: Text(list[i].name, style: T.title)),
+                        Text(money(list[i].price), style: T.moneyOf(15, w: FontWeight.w700, color: _sel == i ? C.primary : C.ink)),
+                        const HGap(12),
+                        RadioDot(selected: _sel == i),
+                      ]),
+                    ),
                   ),
-                ),
-            ]),
-          ),
+              ]),
+            ),
         ],
       ),
     );
@@ -666,11 +551,11 @@ class _BundleScreenState extends ConsumerState<_BundleScreen> {
 class TvScreen extends StatelessWidget {
   const TvScreen({super.key});
   @override
-  Widget build(BuildContext context) => _BundleScreen(title: 'TV', kind: TxKind.tv, providers: tvProviders, bundles: tvBundles, idLabel: 'Smartcard / IUC Number', idHint: 'Enter smartcard number', idLen: 10, prefill: '7000123456', cardNoun: 'Smartcard');
+  Widget build(BuildContext context) => _BundleScreen(title: 'TV', kind: TxKind.tv, providers: tvProviders, idLabel: 'Smartcard / IUC Number', idHint: 'Enter smartcard number', idLen: 10, prefill: '', cardNoun: 'Smartcard');
 }
 
 class InternetScreen extends StatelessWidget {
   const InternetScreen({super.key});
   @override
-  Widget build(BuildContext context) => _BundleScreen(title: 'Internet', kind: TxKind.internet, providers: internetProviders, bundles: internetBundles, idLabel: 'Account / Device ID', idHint: 'Enter account or device ID', idLen: 10, prefill: '', cardNoun: 'Account');
+  Widget build(BuildContext context) => _BundleScreen(title: 'Internet', kind: TxKind.internet, providers: internetProviders, idLabel: 'Account / Device ID', idHint: 'Enter account or device ID', idLen: 10, prefill: '', cardNoun: 'Account');
 }

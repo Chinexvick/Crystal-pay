@@ -8,7 +8,7 @@ import '../widgets/common.dart';
 /// Lets the user take a photo or choose from the gallery. Returns file paths
 /// (blob URLs on web). Uses the system pickers, so no storage permission is
 /// requested. Images are downscaled before upload.
-Future<List<String>> pickPhotos(BuildContext context, {int max = 1}) async {
+Future<List<String>> pickPhotos(BuildContext context, {int max = 1, double maxWidth = 1600, int quality = 82}) async {
   final src = await showAppSheet<ImageSource>(
     context,
     builder: (ctx) => SheetFrame(
@@ -23,14 +23,14 @@ Future<List<String>> pickPhotos(BuildContext context, {int max = 1}) async {
   try {
     final picker = ImagePicker();
     if (src == ImageSource.camera) {
-      final f = await picker.pickImage(source: ImageSource.camera, maxWidth: 1600, imageQuality: 82);
+      final f = await picker.pickImage(source: ImageSource.camera, maxWidth: maxWidth, imageQuality: quality);
       return f == null ? const [] : [f.path];
     }
     if (max > 1) {
-      final l = await picker.pickMultiImage(maxWidth: 1600, imageQuality: 82, limit: max);
+      final l = await picker.pickMultiImage(maxWidth: maxWidth, imageQuality: quality, limit: max);
       return [for (final f in l.take(max)) f.path];
     }
-    final f = await picker.pickImage(source: ImageSource.gallery, maxWidth: 1600, imageQuality: 82);
+    final f = await picker.pickImage(source: ImageSource.gallery, maxWidth: maxWidth, imageQuality: quality);
     return f == null ? const [] : [f.path];
   } catch (_) {
     if (context.mounted) showToast(context, 'Could not open your photos. Check app permissions.', error: true);

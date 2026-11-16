@@ -22,7 +22,6 @@ class WalletScreen extends ConsumerWidget {
   Widget build(BuildContext context, WidgetRef ref) {
     final w = ref.watch(walletProvider);
     final hidden = ref.watch(balanceHiddenProvider);
-    final verified = ref.watch(accountProvider).idVerified;
     final held = ref.watch(ordersProvider).where((o) => o.role == OrderRole.buying && (o.stage == OrderStage.paid || o.stage == OrderStage.shipped || o.stage == OrderStage.delivered)).fold<int>(0, (a, o) => a + o.total);
     final recent = w.txs.take(5).toList();
     return Scaffold(
@@ -47,29 +46,9 @@ class WalletScreen extends ConsumerWidget {
                     child: PhosphorIcon(hidden ? PhosphorIconsRegular.eyeSlash : PhosphorIconsRegular.eye, size: 18, color: Colors.white.withValues(alpha: .85)),
                   ),
                   const Spacer(),
-                  Pressable(
-                    onTap: verified ? null : () => context.push('/settings/verify-id'),
-                    child: Tag(verified ? 'Verified' : 'Verify ID', bg: Colors.white.withValues(alpha: .15), fg: Colors.white, icon: verified ? PhosphorIconsFill.sealCheck : PhosphorIconsFill.warningCircle),
-                  ),
                 ]),
                 const Gap(10),
                 FittedBox(fit: BoxFit.scaleDown, alignment: Alignment.centerLeft, child: Text(hidden ? '₦ ••••••••' : money2(w.balance), style: T.moneyOf(36, color: Colors.white))),
-                const Gap(14),
-                Pressable(
-                  onTap: () {
-                    Clipboard.setData(const ClipboardData(text: '9000012345'));
-                    showToast(context, 'Account number copied');
-                  },
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-                    decoration: BoxDecoration(color: Colors.white.withValues(alpha: .12), borderRadius: BorderRadius.circular(12)),
-                    child: Row(mainAxisSize: MainAxisSize.min, children: [
-                      Text('Wema Bank · 9051 482 770', style: T.smallM.copyWith(color: Colors.white, fontWeight: FontWeight.w700)),
-                      const HGap(8),
-                      PhosphorIcon(PhosphorIconsRegular.copy, size: 15, color: Colors.white.withValues(alpha: .9)),
-                    ]),
-                  ),
-                ),
                 const Gap(20),
                 Row(children: [
                   Expanded(child: _WalletAction(PhosphorIconsBold.plus, 'Add Money', () => context.push('/wallet/add'))),
@@ -85,15 +64,13 @@ class WalletScreen extends ConsumerWidget {
           Row(children: [
             Expanded(child: _Stat(icon: 'security', label: 'Held in Crystal Protect', value: money2(held))),
             const HGap(12),
-            Expanded(child: _Stat(icon: 'gift', label: 'Cashback earned', value: money2(w.cashback))),
           ]),
           const Gap(14),
           AppCard(
             padding: const EdgeInsets.symmetric(horizontal: 4),
             child: Column(children: [
               _MenuRow('chart', 'Transaction History', 'Payments, top-ups and sales', () => context.push('/transactions')),
-              _MenuRow('beneficiaries', 'Saved Beneficiaries', 'Numbers, meters and smartcards', () => context.push('/beneficiaries')),
-              _MenuRow('bills', 'Vouchers', '1 voucher available', () => showToast(context, 'You have 1 voucher: ₦20 off electricity'), last: true),
+              _MenuRow('beneficiaries', 'Saved Beneficiaries', 'Numbers, meters and smartcards', () => context.push('/beneficiaries'), last: true),
             ]),
           ),
           const Gap(24),

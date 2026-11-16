@@ -14,6 +14,8 @@ import '../../core/widgets/buttons.dart';
 import '../../core/widgets/common.dart';
 import '../../core/widgets/inputs.dart';
 import '../../core/security/validators.dart';
+import '../../api/api_client.dart';
+import '../../api/sync.dart';
 import '../../data/account.dart';
 import '../../data/state.dart';
 
@@ -30,10 +32,12 @@ class _SplashScreenState extends ConsumerState<SplashScreen> {
   @override
   void initState() {
     super.initState();
-    _t = Timer(const Duration(milliseconds: 2200), () {
+    final restore = ref.read(authControllerProvider).bootstrap();
+    _t = Timer(const Duration(milliseconds: 1800), () async {
+      final ok = await restore;
       if (!mounted) return;
       final s = ref.read(sessionProvider);
-      context.go(s.loggedIn ? '/home' : (s.seenOnboarding ? '/signin' : '/onboarding'));
+      context.go(ok || s.loggedIn ? '/home' : (s.seenOnboarding ? '/signin' : '/onboarding'));
     });
   }
 
@@ -399,11 +403,12 @@ class SignInScreen extends ConsumerStatefulWidget {
 }
 
 class _SignInScreenState extends ConsumerState<SignInScreen> {
-  final _email = TextEditingController(text: 'victory@crystalpay.app');
+  final _email = TextEditingController();
   final _pass = TextEditingController();
   bool _hide = true;
   bool _remember = true;
   bool _tried = false;
+  bool _busy = false;
 
   @override
   void dispose() {
@@ -415,13 +420,26 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
   String? get _emailErr => isEmail(_email.text) ? null : 'Enter a valid email address';
   String? get _passErr => _pass.text.length >= 8 ? null : 'Enter your password (at least 8 characters)';
 
-  void _submit() {
+  Future<void> _submit() async {
     setState(() => _tried = true);
-    if (_emailErr != null || _passErr != null) return;
+    if (_emailErr != null || _passErr != null || _busy) return;
     FocusScope.of(context).unfocus();
-    ref.read(accountProvider.notifier).signInAs(_email.text);
-    ref.read(sessionProvider.notifier).signIn();
-    context.go('/home');
+    setState(() => _busy = true);
+    try {
+      final r = await ref.read(apiProvider).post('/auth/login', {'email': _email.text.trim().toLowerCase(), 'password': _pass.text});
+      await ref.read(authControllerProvider).signedIn(r);
+      if (mounted) context.go('/home');
+    } on ApiException catch (e) {
+      if (!mounted) return;
+      if (e.code == 'email_not_verified') {
+        showToast(context, e.message);
+        context.push('/otp?email=${Uri.encodeQueryComponent(_email.text.trim().toLowerCase())}');
+      } else {
+        showToast(context, e.message, error: true);
+      }
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   @override
@@ -462,7 +480,7 @@ class _SignInScreenState extends ConsumerState<SignInScreen> {
                   TextLink('Forgot Password?', trailing: false, onTap: () => context.push('/forgot')),
                 ]),
                 const Gap(22),
-                AppButton(label: 'Login', onPressed: _submit),
+                AppButton(label: 'Login', loading: _busy, onPressed: _submit),
                 const Gap(22),
                 const _OrDivider(),
                 const Gap(18),
@@ -522,18 +540,32 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
   String? get _phoneErr => normaliseSignupPhone(_phone.text) != null ? null : 'Enter a valid phone number';
   String? get _passErr => passwordProblem(_pass.text);
 
-  void _submit() {
+  bool _busy = false;
+
+  Future<void> _submit() async {
     setState(() => _tried = true);
-    if (_nameErr != null || _emailErr != null || _phoneErr != null || _passErr != null) return;
+    if (_nameErr != null || _emailErr != null || _phoneErr != null || _passErr != null || _busy) return;
     if (!_agree) {
       showToast(context, 'Please accept the Terms & Conditions and Privacy Policy', error: true);
       return;
     }
     FocusScope.of(context).unfocus();
-    final n = ref.read(accountProvider.notifier);
-    n.startSignup(_email.text);
-    n.setDetails(firstName: _names.first, lastName: _names.sublist(1).join(' '), phone: normaliseSignupPhone(_phone.text)!);
-    context.push('/otp?email=${Uri.encodeQueryComponent(_email.text.trim())}');
+    setState(() => _busy = true);
+    final email = _email.text.trim().toLowerCase();
+    try {
+      await ref.read(apiProvider).post('/auth/signup', {
+        'email': email,
+        'password': _pass.text,
+        'firstName': _names.first,
+        'lastName': _names.sublist(1).join(' '),
+        'phone': normaliseSignupPhone(_phone.text),
+      });
+      if (mounted) context.push('/otp?email=${Uri.encodeQueryComponent(email)}');
+    } on ApiException catch (e) {
+      if (mounted) showToast(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
   }
 
   void _countrySheet() {
@@ -637,7 +669,7 @@ class _SignUpScreenState extends ConsumerState<SignUpScreen> {
           ),
         ]),
         const Gap(22),
-        AppButton(label: 'Create Account', onPressed: _submit),
+        AppButton(label: 'Create Account', loading: _busy, onPressed: _submit),
         const Gap(22),
         _SwitchLink(text: 'Already have an account? ', link: 'Login', onTap: () => context.go('/signin')),
       ]),
@@ -677,9 +709,10 @@ class OtpScreen extends ConsumerStatefulWidget {
 }
 
 class _OtpScreenState extends ConsumerState<OtpScreen> {
-  int _left = 30;
+  int _left = 45;
   Timer? _t;
   String? _err;
+  bool _busy = false;
 
   @override
   void initState() {
@@ -699,48 +732,134 @@ class _OtpScreenState extends ConsumerState<OtpScreen> {
     super.dispose();
   }
 
+  Future<void> _verify(String code) async {
+    if (_busy) return;
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
+    try {
+      final r = await ref.read(apiProvider).post('/auth/verify-otp', {'email': widget.email, 'code': code});
+      await ref.read(authControllerProvider).signedIn(r);
+      if (mounted) context.go('/signup/verify-id');
+    } on ApiException catch (e) {
+      if (mounted) setState(() => _err = e.message);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _resend() async {
+    try {
+      await ref.read(apiProvider).post('/auth/resend-otp', {'email': widget.email, 'purpose': 'signup'});
+      if (!mounted) return;
+      setState(() => _left = 45);
+      _t?.cancel();
+      _t = Timer.periodic(const Duration(seconds: 1), (t) {
+        if (_left == 0) {
+          t.cancel();
+        } else if (mounted) {
+          setState(() => _left--);
+        }
+      });
+      showToast(context, 'A new code is on its way');
+    } on ApiException catch (e) {
+      if (mounted) showToast(context, e.message, error: true);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return AuthScaffold(title: 'Verify Your Email', sub: 'Enter the 4-digit code we sent to ${widget.email}.\nDemo: any code works except 0000.', children: [
-      PinEntry(
-        error: _err,
-        onComplete: (code) {
-          if (code == '0000') {
-            setState(() => _err = 'Incorrect code. Try again');
-            return;
-          }
-          context.go('/signup/details');
-        },
-      ),
+    return AuthScaffold(title: 'Verify Your Email', sub: 'Enter the 6-digit code we sent to ${widget.email}. It expires in 10 minutes.', children: [
+      PinEntry(length: 6, error: _err, onComplete: _verify),
+      if (_busy) const Padding(padding: EdgeInsets.only(top: 14), child: Center(child: SizedBox(width: 22, height: 22, child: CircularProgressIndicator(strokeWidth: 2.4, color: C.primary)))),
       const Gap(10),
-      Center(child: _left > 0 ? Text('Resend code in 0:${_left.toString().padLeft(2, '0')}', style: T.small) : TextLink('Resend code', trailing: false, onTap: () => setState(() => _left = 30))),
+      Center(child: _left > 0 ? Text('Resend code in 0:${_left.toString().padLeft(2, '0')}', style: T.small) : TextLink('Resend code', trailing: false, onTap: _resend)),
     ]);
   }
 }
 
-class ForgotScreen extends StatefulWidget {
+class ForgotScreen extends ConsumerStatefulWidget {
   const ForgotScreen({super.key});
   @override
-  State<ForgotScreen> createState() => _ForgotScreenState();
+  ConsumerState<ForgotScreen> createState() => _ForgotScreenState();
 }
 
-class _ForgotScreenState extends State<ForgotScreen> {
+class _ForgotScreenState extends ConsumerState<ForgotScreen> {
   final _email = TextEditingController();
+  bool _busy = false;
   @override
   void dispose() {
     _email.dispose();
     super.dispose();
   }
 
+  Future<void> _send() async {
+    setState(() => _busy = true);
+    final email = _email.text.trim().toLowerCase();
+    try {
+      await ref.read(apiProvider).post('/auth/forgot', {'email': email});
+      if (mounted) context.push('/reset?email=${Uri.encodeQueryComponent(email)}');
+    } on ApiException catch (e) {
+      if (mounted) showToast(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
-    return AuthScaffold(title: 'Reset Password', sub: 'Enter your email and we will send you a reset link.', children: [
+    return AuthScaffold(title: 'Reset Password', sub: 'Enter your email and we will send you a 6-digit code.', children: [
       AppTextField(controller: _email, label: 'Email address', hint: 'you@example.com', keyboard: TextInputType.emailAddress, onChanged: (_) => setState(() {})),
       const Gap(24),
-      AppButton(label: 'Send reset link', onPressed: isEmail(_email.text) ? () {
-        showToast(context, 'Reset link sent to your email');
-        context.pop();
-      } : null),
+      AppButton(label: 'Send code', loading: _busy, onPressed: isEmail(_email.text) ? _send : null),
+    ]);
+  }
+}
+
+class ResetScreen extends ConsumerStatefulWidget {
+  const ResetScreen({super.key, required this.email});
+  final String email;
+  @override
+  ConsumerState<ResetScreen> createState() => _ResetScreenState();
+}
+
+class _ResetScreenState extends ConsumerState<ResetScreen> {
+  final _code = TextEditingController();
+  final _pass = TextEditingController();
+  bool _busy = false;
+  bool _hide = true;
+
+  @override
+  void dispose() {
+    _code.dispose();
+    _pass.dispose();
+    super.dispose();
+  }
+
+  Future<void> _submit() async {
+    setState(() => _busy = true);
+    try {
+      await ref.read(apiProvider).post('/auth/reset', {'email': widget.email, 'code': _code.text.trim(), 'newPassword': _pass.text});
+      if (!mounted) return;
+      showToast(context, 'Password changed. Sign in with your new password.');
+      context.go('/signin');
+    } on ApiException catch (e) {
+      if (mounted) showToast(context, e.message, error: true);
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final ok = _code.text.trim().length == 6 && passwordProblem(_pass.text) == null;
+    return AuthScaffold(title: 'Choose a New Password', sub: 'Enter the 6-digit code we sent to ${widget.email} and pick a new password.', children: [
+      AppTextField(controller: _code, label: '6-digit code', hint: '000000', keyboard: TextInputType.number, formatters: [FilteringTextInputFormatter.digitsOnly, LengthLimitingTextInputFormatter(6)], onChanged: (_) => setState(() {})),
+      const Gap(14),
+      AppTextField(controller: _pass, label: 'New password', hint: 'At least 8 characters', obscure: _hide, onChanged: (_) => setState(() {}), error: _pass.text.isNotEmpty ? passwordProblem(_pass.text) : null),
+      const Gap(24),
+      AppButton(label: 'Change password', loading: _busy, onPressed: ok ? _submit : null),
     ]);
   }
 }

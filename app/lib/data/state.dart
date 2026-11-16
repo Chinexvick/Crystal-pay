@@ -36,7 +36,7 @@ class InsufficientFunds implements Exception {
 }
 
 class WalletState {
-  const WalletState({required this.balance, required this.txs, this.cashback = 1842.5});
+  const WalletState({required this.balance, required this.txs, this.cashback = 0});
   final num balance;
   final List<Tx> txs;
   final num cashback;
@@ -47,7 +47,11 @@ class WalletNotifier extends Notifier<WalletState> {
   int _n = 100;
 
   @override
-  WalletState build() => WalletState(balance: 48750, txs: List.of(mockTxs));
+  WalletState build() => const WalletState(balance: 0, txs: [], cashback: 0);
+
+  /// Replaces local figures with what the server holds.
+  void applyServer(num balance, List<Tx> txs) => state = state.copyWith(balance: balance, txs: txs);
+  void reset() => state = const WalletState(balance: 0, txs: [], cashback: 0);
 
   String _id() => 'tx${_n++}';
 
@@ -95,7 +99,7 @@ class WalletNotifier extends Notifier<WalletState> {
 
   Tx? find(String id) {
     for (final t in state.txs) {
-      if (t.id == id) return t;
+      if (t.id == id || t.details['Reference'] == id) return t;
     }
     return null;
   }
@@ -275,7 +279,8 @@ final unreadChatsProvider = Provider<int>((ref) => ref.watch(chatsProvider).fold
 
 class NotesNotifier extends Notifier<List<AppNote>> {
   @override
-  List<AppNote> build() => List.of(mockNotes);
+  List<AppNote> build() => const [];
+  void replace(List<AppNote> n) => state = n;
   void add(AppNote n) => state = [n, ...state];
   void markAllRead() => state = [for (final n in state) n.copyWith(read: true)];
   void markRead(String id) => state = [for (final n in state) n.id == id ? n.copyWith(read: true) : n];

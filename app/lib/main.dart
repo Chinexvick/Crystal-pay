@@ -25,15 +25,54 @@ class CrystalPayApp extends ConsumerWidget {
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final router = ref.watch(routerProvider);
-    ref.watch(depositFinalizerProvider);
     return MaterialApp.router(
       title: 'Crystal Pay',
       debugShowCheckedModeBanner: false,
       theme: buildTheme(),
       routerConfig: router,
-      builder: (context, child) => MediaQuery(
-        data: MediaQuery.of(context).copyWith(textScaler: MediaQuery.of(context).textScaler.clamp(minScaleFactor: .9, maxScaleFactor: 1.15)),
-        child: AppLockGate(child: child!),
+      builder: (context, child) => UiScale(child: AppLockGate(child: child!)),
+    );
+  }
+}
+
+/// Draws the whole app at [kUiScale] of its old size. Layout runs on a larger
+/// virtual screen, so every button, icon, font and gap shrinks together.
+const double kUiScale = 0.76;
+
+class UiScale extends StatelessWidget {
+  const UiScale({super.key, required this.child});
+  final Widget child;
+
+  @override
+  Widget build(BuildContext context) {
+    final mq = MediaQuery.of(context);
+    const s = kUiScale;
+    final size = Size(mq.size.width / s, mq.size.height / s);
+    return ClipRect(
+      child: OverflowBox(
+        alignment: Alignment.topLeft,
+        minWidth: size.width,
+        maxWidth: size.width,
+        minHeight: size.height,
+        maxHeight: size.height,
+        child: Transform.scale(
+          scale: s,
+          alignment: Alignment.topLeft,
+          child: SizedBox(
+            width: size.width,
+            height: size.height,
+            child: MediaQuery(
+              data: mq.copyWith(
+                size: size,
+                padding: mq.padding / s,
+                viewPadding: mq.viewPadding / s,
+                viewInsets: mq.viewInsets / s,
+                textScaler: mq.textScaler.clamp(minScaleFactor: .9, maxScaleFactor: 1.15),
+              ),
+              child: child,
+            ),
+          ),
+        ),
       ),
     );
   }

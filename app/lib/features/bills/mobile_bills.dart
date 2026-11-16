@@ -10,7 +10,9 @@ import '../../data/catalog.dart';
 import '../../data/account.dart';
 import '../../data/models.dart';
 import '../../data/state.dart';
+import '../../api/api_client.dart';
 import 'bill_common.dart';
+import 'server_bills.dart';
 
 // ───────────────────────── Airtime ─────────────────────────
 
@@ -35,7 +37,7 @@ class _AirtimeScreenState extends ConsumerState<AirtimeScreen> {
 
   bool get _phoneOk => isNgPhone(_phone.text);
   int get _amt => int.tryParse(_amount.text) ?? 0;
-  double _cb(int a) => (a * .0142 * 100).round() / 100;
+  double _cb(int a) => 0;
 
   void _pay() {
     final n = networkById(_net);
@@ -46,6 +48,8 @@ class _AirtimeScreenState extends ConsumerState<AirtimeScreen> {
         kind: TxKind.airtime,
         productName: 'Airtime',
         provider: n,
+        provId: n.id,
+        customer: _phone.text,
         rows: [('Recipient Mobile', phoneSpaced(_phone.text)), ('Amount', money2(_amt))],
         amount: _amt,
         cashback: _cb(_amt),
@@ -65,7 +69,7 @@ class _AirtimeScreenState extends ConsumerState<AirtimeScreen> {
       child: ListView(
         padding: const EdgeInsets.fromLTRB(Sp.page, 8, Sp.page, 32),
         children: [
-          const PromoStrip(title: 'Earn up to 1.4% cashback', sub: 'On every airtime top-up, instantly.', icon: PhosphorIconsDuotone.coins),
+          const PromoStrip(title: 'Instant top-up', sub: 'Airtime is delivered in seconds.', icon: PhosphorIconsDuotone.coins),
           const Gap(16),
           PhoneCard(
             controller: _phone,
@@ -88,7 +92,6 @@ class _AirtimeScreenState extends ConsumerState<AirtimeScreen> {
             quick: const [100, 200, 300, 400, 500, 1000],
             controller: _amount,
             selected: _amt,
-            subtitleOf: (a) => '+${money2(_cb(a))} back',
             min: 50,
             max: 500000,
             hint: '50 – 500,000',
@@ -138,11 +141,13 @@ class _DataScreenState extends ConsumerState<DataScreen> {
         kind: TxKind.data,
         productName: 'Mobile Data',
         provider: n,
-        rows: [('Recipient Mobile', phoneSpaced(_phone.text)), ('Data Bundle', '${p.label} ${p.validity} Plan'), ('Amount', money2(p.price))],
+        provId: n.id,
+        itemCode: p.code,
+        customer: _phone.text,
+        rows: [('Recipient Mobile', phoneSpaced(_phone.text)), ('Data Bundle', '${p.label} ${p.validity}'), ('Amount', money2(p.price))],
         amount: p.price,
-        cashback: (p.price * .02 * 100).round() / 100,
-        subtitle: '${n.name} · ${p.label} ${p.validity} Plan',
-        details: {'Network': n.name, 'Recipient': _phone.text, 'Bundle': '${p.label} ${p.validity} Plan'},
+        subtitle: '${n.name} · ${p.label}',
+        details: {'Network': n.name, 'Recipient': _phone.text, 'Bundle': p.label},
         beneficiary: _save ? Beneficiary(id: 'b${DateTime.now().millisecondsSinceEpoch}', name: 'Saved ${n.name} number', value: _phone.text, kind: TxKind.data, billerId: _net) : null,
       ),
     );
@@ -150,7 +155,8 @@ class _DataScreenState extends ConsumerState<DataScreen> {
 
   @override
   Widget build(BuildContext context) {
-    final plans = plansFor(_net, dataBuckets[_tab]);
+    final items = ref.watch(billItemsProvider(('data', _net)));
+    final plans = items.maybeWhen(data: (l) => [for (final i in l) _toPlan(i)], orElse: () => const <DataPlan>[]);
     final err = _phone.text.length >= 11 && !_phoneOk ? 'Enter a valid Nigerian number' : null;
     return BillScaffold(
       title: 'Mobile Data',
@@ -184,11 +190,23 @@ class _DataScreenState extends ConsumerState<DataScreen> {
                 _ViewToggle(grid: _grid, onChanged: (g) => setState(() => _grid = g)),
               ]),
               const Gap(10),
-              UnderlineTabs(items: dataBuckets, index: _tab, onChanged: (i) => setState(() => _tab = i)),
               const Gap(14),
-              AnimatedSwitcher(
-                duration: const Duration(milliseconds: 220),
-                child: _grid ? _PlanGrid(key: ValueKey('g$_tab$_net'), plans: plans, onTap: _select) : _PlanList(key: ValueKey('l$_tab$_net'), plans: plans, onTap: _select),
+              items.when(
+                loading: () => const Padding(padding: EdgeInsets.symmetric(vertical: 36), child: Center(child: CircularProgressIndicator(strokeWidth: 2.4, color: C.primary))),
+                error: (e, _) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 20),
+                  child: Column(children: [
+                    Text(e is ApiException && e.status == 404 ? 'This network is not available yet.' : 'Could not load plans.', style: T.small),
+                    const Gap(8),
+                    TextLink('Try again', trailing: false, onTap: () => ref.invalidate(billItemsProvider(('data', _net)))),
+                  ]),
+                ),
+                data: (_) => plans.isEmpty
+                    ? Padding(padding: const EdgeInsets.symmetric(vertical: 24), child: Center(child: Text('No data plans for this network right now.', style: T.small)))
+                    : AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 220),
+                        child: _grid ? _PlanGrid(key: ValueKey('g$_net'), plans: plans, onTap: _select) : _PlanList(key: ValueKey('l$_net'), plans: plans, onTap: _select),
+                      ),
               ),
             ]),
           ),
@@ -196,6 +214,11 @@ class _DataScreenState extends ConsumerState<DataScreen> {
       ),
     );
   }
+}
+
+DataPlan _toPlan(BillItem i) {
+  final m = RegExp(r'(\d+(?:\.\d+)?)\s*(MB|GB|TB)', caseSensitive: false).firstMatch(i.name);
+  return DataPlan(m?.group(1) ?? i.name, (m?.group(2) ?? '').toUpperCase(), 0, i.amount.round(), 'All', code: i.code);
 }
 
 class _ViewToggle extends StatelessWidget {

@@ -27,8 +27,14 @@ class Account {
     this.planRenews,
     this.boostsUsed = 0,
     this.username = '',
+    this.id = '',
+    this.kycStatus = 'none',
+    this.hasPin = false,
   });
 
+  final String id;
+  final String kycStatus;
+  final bool hasPin;
   final String email;
 
   /// Public handle used for Send Money (shown as @username).
@@ -55,7 +61,10 @@ class Account {
   String get fullName => '$firstName $lastName'.trim();
   int get tier => idVerified ? 2 : 1;
 
-  Account copyWith({String? email, String? firstName, String? lastName, String? phone, String? city, IdType? idType, bool? idVerified, bool? biometric, String? photo, PlanId? plan, DateTime? planRenews, int? boostsUsed, String? username}) => Account(
+  Account copyWith({String? email, String? firstName, String? lastName, String? phone, String? city, IdType? idType, bool? idVerified, bool? biometric, String? photo, PlanId? plan, DateTime? planRenews, int? boostsUsed, String? username, String? id, String? kycStatus, bool? hasPin}) => Account(
+        id: id ?? this.id,
+        kycStatus: kycStatus ?? this.kycStatus,
+        hasPin: hasPin ?? this.hasPin,
         email: email ?? this.email,
         firstName: firstName ?? this.firstName,
         lastName: lastName ?? this.lastName,
@@ -72,18 +81,6 @@ class Account {
       );
 }
 
-const _demo = Account(
-  email: 'victory@crystalpay.app',
-  firstName: 'Victory',
-  lastName: 'Bassey',
-  phone: '08030000001',
-  idType: IdType.nin,
-  idVerified: true,
-  photo: 'assets/images/avatars/me.jpg',
-  plan: PlanId.basic,
-  username: 'victory',
-);
-
 /// Suggests a handle from a first name: lowercase letters and digits only.
 String suggestUsername(String first) {
   final base = first.toLowerCase().replaceAll(RegExp(r'[^a-z0-9]'), '');
@@ -96,10 +93,30 @@ bool isValidUsername(String u) => RegExp(r'^[a-z0-9._]{3,20}$').hasMatch(u);
 
 class AccountNotifier extends Notifier<Account> {
   @override
-  Account build() => _demo.copyWith(city: mockProfile.city, planRenews: DateTime.now().add(const Duration(days: 21)));
+  Account build() => const Account(email: '', firstName: '', lastName: '', phone: '');
 
-  /// Demo sign-in: loads the demo profile under the email that was typed.
-  void signInAs(String email) => state = _demo.copyWith(email: email.trim().toLowerCase(), city: mockProfile.city, planRenews: DateTime.now().add(const Duration(days: 21)));
+  /// Applies the signed-in user from the server (the source of truth).
+  void applyServer(Map<String, dynamic> u) {
+    state = Account(
+      id: (u['id'] ?? '').toString(),
+      email: (u['email'] ?? '').toString(),
+      firstName: (u['firstName'] ?? '').toString(),
+      lastName: (u['lastName'] ?? '').toString(),
+      phone: (u['phone'] ?? '').toString(),
+      city: state.city,
+      username: state.username,
+      photo: u['avatarUrl'] as String?,
+      kycStatus: (u['kycStatus'] ?? 'none').toString(),
+      hasPin: u['hasPin'] == true,
+      idVerified: u['kycStatus'] == 'verified',
+      biometric: state.biometric,
+      plan: state.plan,
+      planRenews: state.planRenews,
+      boostsUsed: state.boostsUsed,
+    );
+  }
+
+  void clear() => state = const Account(email: '', firstName: '', lastName: '', phone: '');
 
   /// Fresh sign-up: nothing verified yet.
   void startSignup(String email) => state = Account(email: email.trim().toLowerCase(), firstName: '', lastName: '', phone: '');

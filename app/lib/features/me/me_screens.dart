@@ -11,7 +11,8 @@ import '../../core/widgets/buttons.dart';
 import '../../core/widgets/common.dart';
 import '../../core/widgets/inputs.dart';
 import '../../core/security/biometric.dart';
-import '../../core/utils/pick_photos.dart';
+import '../../api/api_client.dart';
+import '../../api/sync.dart';
 import '../../data/account.dart';
 import '../../data/plans.dart';
 import 'photo_picker.dart';
@@ -201,7 +202,7 @@ class MeScreen extends ConsumerWidget {
                 const Gap(20),
                 AppButton(label: 'Log Out', kind: BtnKind.danger, onPressed: () {
                   Navigator.pop(ctx);
-                  ref.read(sessionProvider.notifier).signOut();
+                  ref.read(authControllerProvider).signOut();
                   context.go('/welcome');
                 }),
                 const Gap(10),
@@ -257,12 +258,17 @@ class ProfileScreen extends ConsumerStatefulWidget {
 }
 
 class _ProfileScreenState extends ConsumerState<ProfileScreen> {
+  late final _first = TextEditingController(text: ref.read(accountProvider).firstName);
+  late final _last = TextEditingController(text: ref.read(accountProvider).lastName);
+  bool _saving = false;
   late final _phone = TextEditingController(text: ref.read(accountProvider).phone);
   late final _city = TextEditingController(text: ref.read(accountProvider).city);
   late final _user = TextEditingController(text: ref.read(accountProvider).username);
 
   @override
   void dispose() {
+    _first.dispose();
+    _last.dispose();
     _phone.dispose();
     _city.dispose();
     _user.dispose();
@@ -280,12 +286,11 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
       body: ListView(padding: const EdgeInsets.fromLTRB(Sp.page, 8, Sp.page, 32), children: [
         const Center(child: ProfilePhotoPicker(size: 96)),
         const Gap(10),
-        Center(child: TextLink('Change photo', trailing: false, onTap: () async {
-          final got = await pickPhotos(context);
-          if (got.isNotEmpty) ref.read(accountProvider.notifier).setPhoto(got.first);
-        })),
+        Center(child: TextLink('Change photo', trailing: false, onTap: () => changeProfilePhoto(context, ref))),
         const Gap(14),
-        AppTextField(controller: TextEditingController(text: a.fullName), label: 'Full name', readOnly: true, helper: a.idVerified ? 'Locked to the name on your ${a.idType?.short ?? 'ID'}' : null),
+        AppTextField(controller: _first, label: 'First name', onChanged: (_) => setState(() {})),
+        const Gap(14),
+        AppTextField(controller: _last, label: 'Last name', onChanged: (_) => setState(() {})),
         const Gap(14),
         AppTextField(controller: TextEditingController(text: a.email), label: 'Email address', readOnly: true),
         const Gap(14),
@@ -305,12 +310,22 @@ class _ProfileScreenState extends ConsumerState<ProfileScreen> {
         const Gap(14),
         if (!a.idVerified) InfoBanner('Your identity is not verified yet. Verify to withdraw, sell and get the blue tick.', kind: BannerKind.warning, action: 'Verify now', onAction: () => context.push('/settings/verify-id')),
         const Gap(28),
-        AppButton(label: 'Save Changes', onPressed: isNgPhone(_phone.text) && isValidUsername(_handle) ? () {
-          ref.read(accountProvider.notifier).setPhone(_phone.text);
-          ref.read(accountProvider.notifier).setUsername(_handle);
-          ref.read(accountProvider.notifier).setCity(_city.text.trim());
-          showToast(context, 'Profile updated');
-          context.pop();
+        AppButton(label: 'Save Changes', loading: _saving, onPressed: isNgPhone(_phone.text) && isValidUsername(_handle) && _first.text.trim().length >= 2 && _last.text.trim().length >= 2 ? () async {
+          setState(() => _saving = true);
+          try {
+            final me = await ref.read(apiProvider).patch('/me', {'firstName': _first.text.trim(), 'lastName': _last.text.trim(), 'phone': _phone.text});
+            ref.read(accountProvider.notifier).applyServer(me);
+            ref.read(accountProvider.notifier).setUsername(_handle);
+            ref.read(accountProvider.notifier).setCity(_city.text.trim());
+            if (context.mounted) {
+              showToast(context, 'Profile updated');
+              context.pop();
+            }
+          } on ApiException catch (e) {
+            if (context.mounted) showToast(context, e.message, error: true);
+          } finally {
+            if (mounted) setState(() => _saving = false);
+          }
         } : null),
       ]),
     );
@@ -345,9 +360,9 @@ class SecurityScreen extends ConsumerWidget {
         AppCard(
           padding: const EdgeInsets.symmetric(horizontal: 16),
           child: Column(children: [
-            _Row(PhosphorIconsDuotone.password, 'Change transaction PIN', 'Used to approve payments', onTap: () => showAppSheet<void>(context, builder: (_) => const _ChangePinSheet())),
+            _Row(PhosphorIconsDuotone.password, ref.watch(accountProvider).hasPin ? 'Change transaction PIN' : 'Set transaction PIN', 'Used to approve payments', onTap: () => showAppSheet<void>(context, builder: (_) => const _ChangePinSheet())),
             const HairDivider(indent: 54),
-            _Row(PhosphorIconsDuotone.lockKey, 'Change password', 'Last changed 3 months ago', onTap: () => showToast(context, 'Password reset link sent to your email', icon: PhosphorIconsFill.envelopeSimple)),
+            _Row(PhosphorIconsDuotone.lockKey, 'Change password', 'Signs you out everywhere', onTap: () => showAppSheet<void>(context, builder: (_) => const _ChangePasswordSheet())),
             const HairDivider(indent: 54),
             _Row(PhosphorIconsDuotone.fingerprint, 'Fingerprint lock', 'Unlock the app with your fingerprint', trailing: Switch(value: acct.biometric, onChanged: (v) => _toggleBio(context, ref, v))),
             const HairDivider(indent: 54),
@@ -388,46 +403,134 @@ class _Row extends StatelessWidget {
       );
 }
 
-class _ChangePinSheet extends StatefulWidget {
+class _ChangePinSheet extends ConsumerStatefulWidget {
   const _ChangePinSheet();
   @override
-  State<_ChangePinSheet> createState() => _ChangePinSheetState();
+  ConsumerState<_ChangePinSheet> createState() => _ChangePinSheetState();
 }
 
-class _ChangePinSheetState extends State<_ChangePinSheet> {
-  int _phase = 0;
+class _ChangePinSheetState extends ConsumerState<_ChangePinSheet> {
+  late final bool _has = ref.read(accountProvider).hasPin;
+  int _phase = 0; // 0 current (only when a PIN exists), 1 new, 2 confirm
+  String _current = '';
   String _first = '';
   String? _err;
+  bool _busy = false;
+
+  @override
+  void initState() {
+    super.initState();
+    if (!_has) _phase = 1;
+  }
+
+  Future<void> _save(String pin) async {
+    setState(() => _busy = true);
+    try {
+      await ref.read(apiProvider).post('/me/pin', {'pin': pin, if (_has) 'currentPin': _current});
+      await ref.read(authControllerProvider).refreshProfile();
+      if (!mounted) return;
+      Navigator.pop(context);
+      showToast(context, _has ? 'Transaction PIN changed' : 'Transaction PIN set');
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _busy = false;
+        _err = e is ApiException ? e.message : 'Could not save the PIN. Try again.';
+        _phase = _has ? 0 : 1;
+      });
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     const heads = ['Enter current PIN', 'Enter new PIN', 'Confirm new PIN'];
     return SheetFrame(
       title: heads[_phase],
-      child: PinEntry(
-        key: ValueKey(_phase),
-        error: _err,
-        onComplete: (pin) {
-          if (_phase == 0) {
-            setState(() {
-              _phase = 1;
-              _err = null;
-            });
-          } else if (_phase == 1) {
-            setState(() {
-              _first = pin;
-              _phase = 2;
-            });
-          } else if (pin != _first) {
-            setState(() {
-              _err = 'PINs do not match';
-              _phase = 1;
-            });
-          } else {
-            Navigator.pop(context);
-            showToast(context, 'Transaction PIN changed');
-          }
-        },
-      ),
+      child: _busy
+          ? const Padding(padding: EdgeInsets.all(30), child: Center(child: CircularProgressIndicator(color: C.primary)))
+          : PinEntry(
+              key: ValueKey(_phase),
+              error: _err,
+              onComplete: (pin) {
+                if (_phase == 0) {
+                  setState(() {
+                    _current = pin;
+                    _phase = 1;
+                    _err = null;
+                  });
+                } else if (_phase == 1) {
+                  setState(() {
+                    _first = pin;
+                    _phase = 2;
+                    _err = null;
+                  });
+                } else if (pin != _first) {
+                  setState(() {
+                    _err = 'PINs do not match';
+                    _phase = 1;
+                  });
+                } else {
+                  _save(pin);
+                }
+              },
+            ),
+    );
+  }
+}
+
+class _ChangePasswordSheet extends ConsumerStatefulWidget {
+  const _ChangePasswordSheet();
+  @override
+  ConsumerState<_ChangePasswordSheet> createState() => _ChangePasswordSheetState();
+}
+
+class _ChangePasswordSheetState extends ConsumerState<_ChangePasswordSheet> {
+  final _cur = TextEditingController();
+  final _new = TextEditingController();
+  bool _busy = false;
+  String? _err;
+
+  @override
+  void dispose() {
+    _cur.dispose();
+    _new.dispose();
+    super.dispose();
+  }
+
+  Future<void> _go() async {
+    setState(() {
+      _busy = true;
+      _err = null;
+    });
+    try {
+      await ref.read(apiProvider).post('/me/password', {'currentPassword': _cur.text, 'newPassword': _new.text});
+      if (!mounted) return;
+      Navigator.pop(context);
+      ref.read(authControllerProvider).signOutLocal();
+    } catch (e) {
+      if (mounted) {
+        setState(() {
+          _busy = false;
+          _err = e is ApiException ? e.message : 'Could not change the password. Try again.';
+        });
+      }
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return SheetFrame(
+      title: 'Change password',
+      child: Column(crossAxisAlignment: CrossAxisAlignment.stretch, children: [
+        AppTextField(controller: _cur, label: 'Current password', hint: 'Current password', obscure: true, onChanged: (_) => setState(() {})),
+        const Gap(12),
+        AppTextField(controller: _new, label: 'New password', hint: 'At least 8 characters', obscure: true, onChanged: (_) => setState(() {})),
+        if (_err != null) ...[const Gap(10), Text(_err!, style: T.small.copyWith(color: C.error))],
+        const Gap(8),
+        Text('You will be signed out on every device and need to sign in again.', style: T.caption),
+        const Gap(16),
+        AppButton(label: 'Change password', loading: _busy, onPressed: _cur.text.isNotEmpty && _new.text.length >= 8 ? _go : null),
+      ]),
     );
   }
 }

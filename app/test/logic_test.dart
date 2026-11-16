@@ -9,7 +9,6 @@ import 'package:crystal_pay/features/market/market_screen.dart';
 import 'package:crystal_pay/core/security/validators.dart';
 import 'package:crystal_pay/core/security/pin_guard.dart';
 import 'package:crystal_pay/core/security/idempotency.dart';
-import 'package:crystal_pay/services/mock_services.dart';
 import 'package:crystal_pay/data/account.dart';
 import 'package:crystal_pay/data/plans.dart';
 import 'package:crystal_pay/data/catalog.dart';
@@ -22,6 +21,7 @@ void main() {
     final c = ProviderContainer();
     addTearDown(c.dispose);
     final w = c.read(walletProvider.notifier);
+    w.applyServer(5000, const []);
     final before = c.read(walletProvider).balance;
     w.pay(kind: TxKind.airtime, title: 'Airtime', subtitle: 'MTN', amount: 1000);
     expect(c.read(walletProvider).balance, before - 1000);
@@ -102,14 +102,6 @@ void main() {
     });
   });
 
-  group('CCT quotes', () {
-    test('fund quote covers the requested Naira plus fee', () async {
-      final q = await MockTokenService().quoteFund(10000);
-      expect(q.netNaira, 10000);
-      expect(q.tokens * q.rate, greaterThanOrEqualTo(10000));
-    });
-  });
-
   group('Seller plans and real estate', () {
     test('Basic is 3000 naira for 5 listings and tiers rise', () {
       expect(planById(PlanId.basic).price, 3000);
@@ -183,6 +175,7 @@ void main() {
     test('a lapsed plan hides the seller items from the feed', () {
       final c = ProviderContainer();
       addTearDown(c.dispose);
+      c.read(accountProvider.notifier).state = c.read(accountProvider).copyWith(plan: PlanId.pro, planRenews: DateTime.now().add(const Duration(days: 30)));
       expect(c.read(feedProvider).any((l) => l.seller.id == 'me'), isTrue);
       c.read(accountProvider.notifier).state = c.read(accountProvider).copyWith(planRenews: DateTime.now().subtract(const Duration(days: 1)));
       expect(c.read(feedProvider).any((l) => l.seller.id == 'me'), isFalse);

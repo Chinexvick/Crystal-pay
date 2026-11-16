@@ -103,8 +103,8 @@ class _CartScreenState extends ConsumerState<CartScreen> {
   }
 
   Future<void> _pay(List<Listing> items, bool delivery, int total, Set<String> sellers) async {
-    final pin = await showAppSheet<bool>(context, builder: (_) => PinSheet(amount: total, subtitle: 'Pay for ${items.length} ${items.length == 1 ? 'item' : 'items'}'));
-    if (pin != true || !mounted) return;
+    final pin = await showAppSheet<String>(context, builder: (_) => PinSheet(amount: total, subtitle: 'Pay for ${items.length} ${items.length == 1 ? 'item' : 'items'}'));
+    if (pin == null || !mounted) return;
     showDialog<void>(context: context, barrierDismissible: false, barrierColor: C.scrim, builder: (_) => const ProcessingDialog());
     await Future<void>.delayed(const Duration(milliseconds: 1500));
     if (!mounted) return;

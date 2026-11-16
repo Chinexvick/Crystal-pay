@@ -39,6 +39,7 @@ final routerProvider = Provider<GoRouter>((ref) {
       GoRoute(path: '/signin', builder: (c, s) => const SignInScreen()),
       GoRoute(path: '/signup', builder: (c, s) => const SignUpScreen()),
       GoRoute(path: '/forgot', builder: (c, s) => const ForgotScreen()),
+      GoRoute(path: '/reset', builder: (c, s) => ResetScreen(email: s.uri.queryParameters['email'] ?? '')),
       GoRoute(path: '/otp', builder: (c, s) => OtpScreen(email: s.uri.queryParameters['email'] ?? '')),
       GoRoute(path: '/signup/details', builder: (c, s) => const DetailsScreen()),
       GoRoute(path: '/signup/verify-id', builder: (c, s) => const VerifyIdScreen(onboarding: true)),
@@ -88,9 +89,7 @@ final routerProvider = Provider<GoRouter>((ref) {
           return const AddMoneyScreen();
         },
       ),
-      GoRoute(path: '/wallet/add/transfer', builder: (c, s) => const FundTransferScreen()),
       GoRoute(path: '/wallet/add/cct', builder: (c, s) => const CctFundScreen()),
-      GoRoute(path: '/wallet/cct/deposit/:id', builder: (c, s) => DepositScreen(id: s.pathParameters['id']!)),
       GoRoute(path: '/wallet/withdraw', builder: (c, s) => const WithdrawScreen()),
       GoRoute(path: '/transactions', builder: (c, s) => TransactionsScreen(key: ValueKey(s.uri.toString()), kind: s.uri.queryParameters['kind'])),
       GoRoute(path: '/tx/:id', builder: (c, s) => TxDetailScreen(id: s.pathParameters['id']!)),

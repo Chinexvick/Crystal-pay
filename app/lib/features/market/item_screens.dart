@@ -705,8 +705,8 @@ class _CheckoutScreenState extends ConsumerState<CheckoutScreen> {
       showToast(context, 'Insufficient wallet balance', error: true);
       return;
     }
-    final pin = await showAppSheet<bool>(context, builder: (_) => PinSheet(amount: total));
-    if (pin != true || !mounted) return;
+    final pin = await showAppSheet<String>(context, builder: (_) => PinSheet(amount: total));
+    if (pin == null || !mounted) return;
     showDialog<void>(context: context, barrierDismissible: false, barrierColor: C.scrim, builder: (_) => const ProcessingDialog());
     await Future<void>.delayed(const Duration(milliseconds: 1400));
     if (!mounted) return;

@@ -42,5 +42,5 @@ abstract class TokenService {
 
 abstract class PayoutService {
   /// POST /payouts/bank, withdraw Naira from the wallet to a verified account.
-  Future<PayoutReceipt> withdrawNaira({required int amount, required PayoutAccount account, required String idempotencyKey});
+  Future<PayoutReceipt> withdrawNaira({required int amount, required PayoutAccount account, required String idempotencyKey, String? pin});
 }

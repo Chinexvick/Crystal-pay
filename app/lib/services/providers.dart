@@ -1,38 +1,48 @@
-
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../api/sync.dart';
 import '../data/models.dart';
 import '../data/state.dart';
+import 'api_services.dart';
 import 'contracts.dart';
-import 'mock_services.dart';
 import 'models.dart';
 
-// Swap these for real implementations when the backend is ready, or override
-// them in tests. No screen constructs a service directly.
-final bankServiceProvider = Provider<BankService>((ref) => MockBankService());
-final flutterwaveServiceProvider = Provider<FlutterwaveService>((ref) => MockFlutterwaveService());
-final tokenServiceProvider = Provider<TokenService>((ref) => MockTokenService());
-final payoutServiceProvider = Provider<PayoutService>((ref) => MockPayoutService());
-
-final cctRateProvider = FutureProvider<double>((ref) => ref.watch(tokenServiceProvider).indicativeRate());
+final bankServiceProvider = Provider<BankService>((ref) => ApiBankService(ref.read(apiProvider)));
+final flutterwaveServiceProvider = Provider<FlutterwaveService>((ref) => ApiFlutterwaveService(ref.read(apiProvider)));
+final payoutServiceProvider = Provider<PayoutService>((ref) => ApiPayoutService(ref.read(apiProvider)));
 
 final banksProvider = FutureProvider<List<Bank>>((ref) => ref.watch(bankServiceProvider).banks());
 
-final depositProvider = StreamProvider.family<DepositSession, String>((ref, id) => ref.watch(tokenServiceProvider).watch(id));
-
-/// Verified payout accounts. In production this is GET /payout-accounts.
+/// The user's saved bank accounts, kept on the server.
 class PayoutAccountsNotifier extends Notifier<List<PayoutAccount>> {
   @override
-  List<PayoutAccount> build() => const [
-        PayoutAccount(id: 'pa1', bank: Bank('058', 'Guaranty Trust Bank'), accountNumber: '0123456781', accountName: 'VICTORY BASSEY'),
-      ];
-
-  void add(PayoutAccount a) {
-    if (state.any((x) => x.accountNumber == a.accountNumber && x.bank.code == a.bank.code)) return;
-    state = [...state, a];
+  List<PayoutAccount> build() {
+    Future.microtask(refresh);
+    return const [];
   }
 
-  void remove(String id) => state = state.where((a) => a.id != id).toList();
+  Future<void> refresh() async {
+    try {
+      final r = await ref.read(apiProvider).get('/payout-accounts');
+      state = [for (final a in (r['items'] as List? ?? const [])) _from(a)];
+    } catch (_) {/* keep what we have */}
+  }
+
+  PayoutAccount _from(dynamic a) => PayoutAccount(id: a['id'].toString(), bank: Bank(a['bankCode'].toString(), (a['bankName'] ?? '').toString()), accountNumber: a['accountNumber'].toString(), accountName: (a['accountName'] ?? '').toString());
+
+  Future<PayoutAccount> create(Bank bank, String number, String name) async {
+    final r = await ref.read(apiProvider).post('/payout-accounts', {'bankCode': bank.code, 'bankName': bank.name, 'accountNumber': number, 'accountName': name});
+    final acct = _from(r);
+    state = [acct, ...state.where((x) => x.id != acct.id)];
+    return acct;
+  }
+
+  Future<void> remove(String id) async {
+    await ref.read(apiProvider).delete('/payout-accounts/$id');
+    state = state.where((a) => a.id != id).toList();
+  }
+
+  void clear() => state = const [];
 }
 
 final payoutAccountsProvider = NotifierProvider<PayoutAccountsNotifier, List<PayoutAccount>>(PayoutAccountsNotifier.new);
@@ -41,21 +51,4 @@ final payoutAccountsProvider = NotifierProvider<PayoutAccountsNotifier, List<Pay
 final sentOutTodayProvider = Provider<num>((ref) {
   final now = DateTime.now();
   return ref.watch(walletProvider).txs.where((t) => t.kind == TxKind.withdraw && t.date.year == now.year && t.date.month == now.month && t.date.day == now.day).fold<num>(0, (a, t) => a + t.amount);
-});
-
-/// App-wide listener that applies the result of finished CCT deposits exactly
-/// once (credit wallet / notify) even if the user left the
-/// deposit screen. In production the backend credits the ledger and this only
-/// refreshes the balance.
-final depositFinalizerProvider = Provider<void>((ref) {
-  final applied = <String>{};
-  final sub = ref.watch(tokenServiceProvider).updates.listen((s) {
-    if (s.status != DepositStatus.completed || !applied.add(s.id)) return;
-    final wallet = ref.read(walletProvider.notifier);
-    final notes = ref.read(notesProvider.notifier);
-    final q = s.quote;
-      wallet.topUp(q.netNaira, 'Crystal Cat (CCT)', kind: TxKind.cctTopup, details: {'Sent': '${q.tokens} CCT', 'Rate': '₦${q.rate} / CCT', 'Reference': s.reference ?? ''});
-      notes.add(AppNote(id: 'n_${s.id}', kind: NoteKind.wallet, title: 'Wallet credited', body: '₦${q.netNaira.toStringAsFixed(0)} was added from your CCT deposit.', time: DateTime.now()));
-  });
-  ref.onDispose(sub.cancel);
 });
